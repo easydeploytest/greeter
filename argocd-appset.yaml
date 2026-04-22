@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: my-app
+  name: greeter
   namespace: argocd
 spec:
   generators:
@@ -11,7 +11,7 @@ spec:
           - env: prod
   template:
     metadata:
-      name: "my-app-{{env}}"
+      name: "greeter-{{env}}"
       annotations:
         notifications.argoproj.io/subscribe.on-deployed.ntfy: ''
         notifications.argoproj.io/subscribe.on-health-degraded.ntfy: ''
@@ -19,7 +19,7 @@ spec:
     spec:
       project: default
       source:
-        repoURL: https://github.com/easydeploytest/REPO_NAME
+        repoURL: https://github.com/easydeploytest/greeter
         targetRevision: main
         path: chart
         helm:
@@ -27,7 +27,7 @@ spec:
             - ../values-{{env}}.yaml
       destination:
         server: https://kubernetes.default.svc
-        namespace: "my-app-{{env}}"
+        namespace: "greeter-{{env}}"
       syncPolicy:
         automated:
           prune: true

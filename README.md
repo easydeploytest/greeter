@@ -1,13 +1,13 @@
-# my-app
+# greeter
 
 Deployed on [EasyDeploy](https://github.com/easydeploytest/EasyDeploy) — k3s + ArgoCD + Infisical + OTEL → Grafana Cloud.
 
 | | |
 |---|---|
-| **Dev** | https://my-app-dev.easy-deploy.135.181.177.246.nip.io |
-| **Prod** | https://my-app.easy-deploy.135.181.177.246.nip.io |
-| **ArgoCD** | https://argocd.easy-deploy.135.181.177.246.nip.io/applications?search=my-app |
-| **Infisical** | https://infisical.easy-deploy.135.181.177.246.nip.io — project **my-app** |
+| **Dev** | https://greeter-dev.easy-deploy.135.181.177.246.nip.io |
+| **Prod** | https://greeter.easy-deploy.135.181.177.246.nip.io |
+| **ArgoCD** | https://argocd.easy-deploy.135.181.177.246.nip.io/applications?search=greeter |
+| **Infisical** | https://infisical.easy-deploy.135.181.177.246.nip.io — project **greeter** |
 | **Grafana** | https://shanzindlr.grafana.net |
 
 ## Getting started
@@ -23,7 +23,7 @@ CI re-tags the latest image as that version and ArgoCD syncs the prod namespace.
 
 ## Secrets
 
-Add secrets in [Infisical](https://infisical.easy-deploy.135.181.177.246.nip.io) → project **my-app** → environment **dev** or **prod**.
+Add secrets in [Infisical](https://infisical.easy-deploy.135.181.177.246.nip.io) → project **greeter** → environment **dev** or **prod**.
 They appear in your app as environment variables within ~5 minutes, no redeploy needed.
 
 ## Required GitHub Secrets

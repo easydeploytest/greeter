@@ -1,9 +1,10 @@
 const http = require('http');
 
-const PORT = process.env.PORT || 3000;
-const APP = process.env.OTEL_SERVICE_NAME || 'my-app';
+const PORT = process.env.PORT || 8080;
+const APP = process.env.OTEL_SERVICE_NAME || 'greeter';
 const ENV = process.env.DEPLOYMENT_ENV || process.env.NODE_ENV || 'dev';
 const GREETING = process.env.GREETING || 'Hello from EasyDeploy!';
+const NAME = process.env.NAME || 'World';
 
 const server = http.createServer((req, res) => {
   if (req.url === '/healthz') {
@@ -16,7 +17,7 @@ const server = http.createServer((req, res) => {
   res.end(JSON.stringify({
     app: APP,
     env: ENV,
-    message: GREETING,
+    message: `${GREETING}, ${NAME}!`,
     time: new Date().toISOString(),
   }));
 });

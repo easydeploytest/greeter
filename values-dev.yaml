@@ -5,11 +5,11 @@ clusterIP: 135.181.177.246
 env: dev
 health:
   startup_delay: 10
-image: registry.easy-deploy.135.181.177.246.nip.io/easy-deploy/my-app:latest
+image: registry.easy-deploy.135.181.177.246.nip.io/easy-deploy/greeter:latest
 imagePullPolicy: Always
 infisicalHost: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
-name: my-app
-port: 3000
+name: greeter
+port: 8080
 resources:
   limits:
     cpu: 500m
