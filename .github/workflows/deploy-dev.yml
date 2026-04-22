@@ -1,0 +1,194 @@
+name: Deploy dev
+
+on:
+  push:
+    branches: [main]
+
+env:
+  NTFY_URL: "https://ntfy.sh/easydeploy-cicd-7x4k2"
+  REGISTRY: "registry.easy-deploy.135.181.177.246.nip.io"
+  INFISICAL_URL: "https://infisical.easy-deploy.135.181.177.246.nip.io"
+  INFISICAL_ORG_ID: "058c91f2-63c4-4a9b-a58a-74855d18f167"
+  ARGOCD_URL: "https://argocd.easy-deploy.135.181.177.246.nip.io"
+
+jobs:
+  deploy:
+    name: Build & deploy dev
+    runs-on: self-hosted
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read app name
+        id: app
+        run: |
+          APP=$(python3 -c "import yaml; print(yaml.safe_load(open('app.yaml'))['name'])")
+          echo "name=$APP" >> "$GITHUB_OUTPUT"
+
+      - name: Notify build started
+        env:
+          APP: ${{ steps.app.outputs.name }}
+        run: |
+          curl -sf "$NTFY_URL" \
+            -H "Title: 🔨 Build started: $APP" \
+            -H "Tags: building" \
+            -H "Actions: view, GitHub Run, $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -d "Commit ${GITHUB_SHA::8} by $GITHUB_ACTOR" || true
+
+      - name: Build and push image
+        env:
+          APP: ${{ steps.app.outputs.name }}
+        run: |
+          docker login $REGISTRY -u easydeploy -p EasyDeploy2024
+          docker buildx build \
+            --push \
+            -t $REGISTRY/easy-deploy/$APP:$GITHUB_SHA \
+            -t $REGISTRY/easy-deploy/$APP:latest \
+            .
+          echo "✅ Image pushed: $REGISTRY/easy-deploy/$APP:${GITHUB_SHA::8}"
+
+      - name: Install PyYAML
+        run: pip install pyyaml --quiet
+
+      - name: Regenerate values and AppSet
+        env:
+          APP: ${{ steps.app.outputs.name }}
+        run: |
+          python3 generator/generate.py app.yaml "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+
+      - name: Create Infisical project and wire secrets
+        env:
+          APP: ${{ steps.app.outputs.name }}
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_IDENTITY_ID: ${{ secrets.INFISICAL_IDENTITY_ID }}
+        run: |
+          TOKEN=$(curl -sf -X POST "$INFISICAL_URL/api/v1/auth/universal-auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"clientId\":\"$INFISICAL_CLIENT_ID\",\"clientSecret\":\"$INFISICAL_CLIENT_SECRET\"}" \
+            | jq -r '.accessToken')
+
+          [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ] && echo "❌ Infisical auth failed" && exit 1
+          echo "✅ Authenticated with Infisical"
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$INFISICAL_URL/api/v2/workspace" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"projectName\":\"$APP\",\"slug\":\"$APP\"}")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+            PROJECT_ID=$(echo "$BODY" | jq -r '.workspace.id // empty')
+            echo "✅ Created Infisical project '$APP' (id: $PROJECT_ID)"
+            curl -s -o /dev/null \
+              -X POST "$INFISICAL_URL/api/v1/workspace/$PROJECT_ID/identity-memberships" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"identityId\":\"$INFISICAL_IDENTITY_ID\",\"roles\":[{\"role\":\"member\"}]}"
+          elif [ "$HTTP_CODE" = "409" ] || [ "$HTTP_CODE" = "400" ] && echo "$BODY" | grep -q "already exists"; then
+            echo "ℹ️  Infisical project '$APP' already exists — fetching project ID"
+            PROJECT_ID=$(curl -sf "$INFISICAL_URL/api/v1/workspace" \
+              -H "Authorization: Bearer $TOKEN" \
+              | jq -r ".workspaces[] | select(.slug == \"$APP\") | .id // empty")
+            echo "✅ Found Infisical project '$APP' (id: $PROJECT_ID)"
+          else
+            echo "❌ Unexpected Infisical response $HTTP_CODE: $BODY"
+            exit 1
+          fi
+
+          echo "INFISICAL_PROJECT_ID=$PROJECT_ID" >> "$GITHUB_ENV"
+
+          for ns in "${APP}-dev" "${APP}-prod"; do
+            kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
+            kubectl create secret generic "${APP}-infisical-auth" \
+              --namespace "$ns" \
+              --from-literal=clientId="$INFISICAL_CLIENT_ID" \
+              --from-literal=clientSecret="$INFISICAL_CLIENT_SECRET" \
+              --dry-run=client -o yaml | kubectl apply -f -
+            echo "✅ Infisical auth secret applied to $ns"
+          done
+
+      - name: Update dev image tag in values
+        env:
+          APP: ${{ steps.app.outputs.name }}
+        run: |
+          python3 - <<'EOF'
+          import yaml, os
+          app = os.environ['APP']
+          path = "values-dev.yaml"
+          with open(path) as f:
+              v = yaml.safe_load(f)
+          v['image'] = f"registry.easy-deploy.135.181.177.246.nip.io/easy-deploy/{app}:{os.environ['GITHUB_SHA']}"
+          with open(path, 'w') as f:
+              yaml.dump(v, f, default_flow_style=False)
+          print(f"Updated {path}")
+          EOF
+
+      - name: Commit and push
+        env:
+          APP: ${{ steps.app.outputs.name }}
+        run: |
+          git config user.email "easydeploy-bot@users.noreply.github.com"
+          git config user.name "EasyDeploy Bot"
+          git add values-dev.yaml argocd-appset.yaml RUNBOOK.md README.md 2>/dev/null || true
+          git diff --staged --quiet && echo "nothing to commit" && exit 0
+          git commit -m "chore($APP): deploy dev ${GITHUB_SHA::8}"
+          git pull --rebase
+          git push
+
+      - name: Apply ArgoCD ApplicationSet and sync
+        env:
+          APP: ${{ steps.app.outputs.name }}
+          ARGOCD_PASSWORD: ${{ secrets.ARGOCD_PASSWORD }}
+        run: |
+          kubectl apply -f argocd-appset.yaml
+
+          ARGOCD_TOKEN=$(curl -sk -X POST "$ARGOCD_URL/api/v1/session" \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"admin\",\"password\":\"$ARGOCD_PASSWORD\"}" \
+            | jq -r '.token // empty')
+
+          if [ -z "$ARGOCD_TOKEN" ]; then
+            echo "⚠️  ArgoCD auth failed — sync will happen on next poll"
+          else
+            sleep 3
+            SYNC_RESP=$(curl -sk -o /dev/null -w "%{http_code}" \
+              -X POST "$ARGOCD_URL/api/v1/applications/$APP-dev/sync" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"revision":"HEAD","prune":false,"dryRun":false}')
+            [ "$SYNC_RESP" = "200" ] \
+              && echo "✅ ArgoCD sync triggered for $APP-dev" \
+              || echo "⚠️  ArgoCD sync returned $SYNC_RESP — will sync on next poll"
+          fi
+
+      - name: Notify deployed to dev
+        if: success()
+        env:
+          APP: ${{ steps.app.outputs.name }}
+        run: |
+          DEV_URL="https://$APP-dev.easy-deploy.135.181.177.246.nip.io"
+          ARGO_APP_URL="$ARGOCD_URL/applications/$APP-dev"
+          INFISICAL_PROJECT_URL="$INFISICAL_URL/organizations/$INFISICAL_ORG_ID/projects/secret-management/$INFISICAL_PROJECT_ID/overview"
+          COMMIT_MSG=$(git log -1 --pretty=format:%s)
+          curl -sf "$NTFY_URL" \
+            -H "Title: ✅ Deployed to dev: $APP" \
+            -H "Tags: white_check_mark" \
+            -H "Actions: view, Open app, $DEV_URL; view, ArgoCD, $ARGO_APP_URL; view, Infisical, $INFISICAL_PROJECT_URL" \
+            -d "${GITHUB_SHA::8}: $COMMIT_MSG" || true
+
+      - name: Notify build failed
+        if: failure()
+        env:
+          APP: ${{ steps.app.outputs.name }}
+        run: |
+          curl -sf "$NTFY_URL" \
+            -H "Title: ❌ Build failed: $APP" \
+            -H "Tags: x,rotating_light" \
+            -H "Priority: high" \
+            -H "Actions: view, View run, $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -d "Commit ${GITHUB_SHA::8} failed" || true

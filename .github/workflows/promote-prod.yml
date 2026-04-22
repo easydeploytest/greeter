@@ -1,0 +1,135 @@
+name: Promote to prod
+
+on:
+  release:
+    types: [published]
+
+env:
+  NTFY_URL: "https://ntfy.sh/easydeploy-cicd-7x4k2"
+  REGISTRY: "registry.easy-deploy.135.181.177.246.nip.io"
+  ARGOCD_URL: "https://argocd.easy-deploy.135.181.177.246.nip.io"
+
+jobs:
+  promote:
+    name: Promote to prod
+    runs-on: self-hosted
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read app name and version
+        id: meta
+        run: |
+          APP=$(python3 -c "import yaml; print(yaml.safe_load(open('app.yaml'))['name'])")
+          VERSION="${{ github.event.release.tag_name }}"
+          echo "app=$APP" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "App: $APP  Version: $VERSION"
+
+      - name: Notify promotion started
+        env:
+          APP: ${{ steps.meta.outputs.app }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          curl -sf "$NTFY_URL" \
+            -H "Title: 🚀 Promoting to prod: $APP $VERSION" \
+            -H "Tags: rocket" \
+            -d "Release $VERSION triggered by $GITHUB_ACTOR" || true
+
+      - name: Re-tag image for prod
+        env:
+          APP: ${{ steps.meta.outputs.app }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          docker login $REGISTRY -u easydeploy -p EasyDeploy2024
+          docker pull "$REGISTRY/easy-deploy/$APP:latest"
+          docker tag "$REGISTRY/easy-deploy/$APP:latest" "$REGISTRY/easy-deploy/$APP:$VERSION"
+          docker tag "$REGISTRY/easy-deploy/$APP:latest" "$REGISTRY/easy-deploy/$APP:stable"
+          docker push "$REGISTRY/easy-deploy/$APP:$VERSION"
+          docker push "$REGISTRY/easy-deploy/$APP:stable"
+          echo "✅ Promoted $APP → $VERSION + stable"
+
+      - name: Install PyYAML
+        run: pip install pyyaml --quiet
+
+      - name: Update prod image tag in values
+        env:
+          APP: ${{ steps.meta.outputs.app }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          python3 - <<'EOF'
+          import yaml, os
+          app = os.environ['APP']
+          version = os.environ['VERSION']
+          path = "values-prod.yaml"
+          with open(path) as f:
+              v = yaml.safe_load(f)
+          v['image'] = f"registry.easy-deploy.135.181.177.246.nip.io/easy-deploy/{app}:{version}"
+          with open(path, 'w') as f:
+              yaml.dump(v, f, default_flow_style=False)
+          print(f"Updated {path} -> {v['image']}")
+          EOF
+
+      - name: Commit and push prod values
+        env:
+          APP: ${{ steps.meta.outputs.app }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          git config user.email "easydeploy-bot@users.noreply.github.com"
+          git config user.name "EasyDeploy Bot"
+          git add values-prod.yaml
+          git diff --staged --quiet || git commit -m "chore($APP): promote to prod $VERSION"
+          git pull --rebase
+          git push
+
+      - name: Sync ArgoCD prod
+        env:
+          APP: ${{ steps.meta.outputs.app }}
+          ARGOCD_PASSWORD: ${{ secrets.ARGOCD_PASSWORD }}
+        run: |
+          ARGOCD_TOKEN=$(curl -sk -X POST "$ARGOCD_URL/api/v1/session" \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"admin\",\"password\":\"$ARGOCD_PASSWORD\"}" \
+            | jq -r '.token // empty')
+
+          if [ -z "$ARGOCD_TOKEN" ]; then
+            echo "⚠️  ArgoCD auth failed — sync will happen on next poll"
+          else
+            sleep 3
+            SYNC_RESP=$(curl -sk -o /dev/null -w "%{http_code}" \
+              -X POST "$ARGOCD_URL/api/v1/applications/$APP-prod/sync" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"revision":"HEAD","prune":false,"dryRun":false}')
+            [ "$SYNC_RESP" = "200" ] \
+              && echo "✅ ArgoCD sync triggered for $APP-prod" \
+              || echo "⚠️  ArgoCD sync returned $SYNC_RESP — will sync on next poll"
+          fi
+
+      - name: Notify promoted to prod
+        if: success()
+        env:
+          APP: ${{ steps.meta.outputs.app }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          PROD_URL="https://$APP.easy-deploy.135.181.177.246.nip.io"
+          curl -sf "$NTFY_URL" \
+            -H "Title: ✅ Promoted to prod: $APP $VERSION" \
+            -H "Tags: white_check_mark,tada" \
+            -H "Actions: view, Open app, $PROD_URL; view, ArgoCD, $ARGOCD_URL/applications/$APP-prod" \
+            -d "$APP $VERSION is live in prod" || true
+
+      - name: Notify promotion failed
+        if: failure()
+        env:
+          APP: ${{ steps.meta.outputs.app }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          curl -sf "$NTFY_URL" \
+            -H "Title: ❌ Promotion failed: $APP $VERSION" \
+            -H "Tags: x,rotating_light" \
+            -H "Priority: high" \
+            -H "Actions: view, View run, $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -d "Failed to promote $APP $VERSION to prod" || true

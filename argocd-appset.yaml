@@ -1,0 +1,36 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: my-app
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - env: dev
+          - env: prod
+  template:
+    metadata:
+      name: "my-app-{{env}}"
+      annotations:
+        notifications.argoproj.io/subscribe.on-deployed.ntfy: ''
+        notifications.argoproj.io/subscribe.on-health-degraded.ntfy: ''
+        notifications.argoproj.io/subscribe.on-sync-failed.ntfy: ''
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/easydeploytest/REPO_NAME
+        targetRevision: main
+        path: chart
+        helm:
+          valueFiles:
+            - ../values-{{env}}.yaml
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "my-app-{{env}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

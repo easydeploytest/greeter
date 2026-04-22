@@ -1,0 +1,24 @@
+auth:
+  attributes: []
+  require_auth: false
+clusterIP: 135.181.177.246
+env: prod
+health:
+  startup_delay: 10
+image: registry.easy-deploy.135.181.177.246.nip.io/easy-deploy/my-app:latest
+imagePullPolicy: Always
+infisicalHost: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+name: my-app
+port: 3000
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+scaling:
+  cpu_target: 80
+  max: 3
+  min: 1
+team: easy-deploy
