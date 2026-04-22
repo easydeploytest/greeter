@@ -61,9 +61,9 @@ jobs:
       - name: Create Infisical project and wire secrets
         env:
           APP: ${{ steps.app.outputs.name }}
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          INFISICAL_IDENTITY_ID: ${{ secrets.INFISICAL_IDENTITY_ID }}
+          INFISICAL_CLIENT_ID: "54b2f9cf-1ea8-4a09-9a35-e630d3f1d30a"
+          INFISICAL_CLIENT_SECRET: "66e62eec0d4f037012b722220fa5fde9358e73b497856e0aa7fb1ece1fe868bd"
+          INFISICAL_IDENTITY_ID: "782c32e7-b52c-4be4-a2e0-d05e80cabb53"
         run: |
           TOKEN=$(curl -sf -X POST "$INFISICAL_URL/api/v1/auth/universal-auth/login" \
             -H "Content-Type: application/json" \
@@ -143,7 +143,7 @@ jobs:
       - name: Apply ArgoCD ApplicationSet and sync
         env:
           APP: ${{ steps.app.outputs.name }}
-          ARGOCD_PASSWORD: ${{ secrets.ARGOCD_PASSWORD }}
+          ARGOCD_PASSWORD: "HpjXNxyHse9yjAB6"
         run: |
           kubectl apply -f argocd-appset.yaml
 

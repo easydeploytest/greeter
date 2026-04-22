@@ -87,7 +87,7 @@ jobs:
       - name: Sync ArgoCD prod
         env:
           APP: ${{ steps.meta.outputs.app }}
-          ARGOCD_PASSWORD: ${{ secrets.ARGOCD_PASSWORD }}
+          ARGOCD_PASSWORD: "HpjXNxyHse9yjAB6"
         run: |
           ARGOCD_TOKEN=$(curl -sk -X POST "$ARGOCD_URL/api/v1/session" \
             -H "Content-Type: application/json" \
